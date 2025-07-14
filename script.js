@@ -49,9 +49,48 @@ async function fetchMoviesFromLibrary(embyServerUrl, apiKey, libraryId) {
     return data.Items || [];
 }
 
+// Utility functions for improved duplicate detection
+function calculateSimilarity(str1, str2) {
+    // Simple Levenshtein distance-based similarity
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 1.0;
+    
+    const distance = levenshteinDistance(longer, shorter);
+    return (longer.length - distance) / longer.length;
+}
+
+function levenshteinDistance(str1, str2) {
+    const matrix = [];
+    
+    for (let i = 0; i <= str2.length; i++) {
+        matrix[i] = [i];
+    }
+    
+    for (let j = 0; j <= str1.length; j++) {
+        matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= str2.length; i++) {
+        for (let j = 1; j <= str1.length; j++) {
+            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+    
+    return matrix[str2.length][str1.length];
+}
+
 function findDuplicatesInLibrary(movies) {
     const duplicates = {};
-    const duplicatesByName = {};
 
     movies.forEach(movie => {
         const name = movie.Name;
@@ -75,26 +114,95 @@ function findDuplicatesInLibrary(movies) {
 
         if (!name) return;
 
-        const key = year ? `${name.trim()}_${year}` : name.trim();
-        if (!duplicates[key]) duplicates[key] = [];
-        duplicates[key].push({ path, year, size: fileSize, resolution });
+        // Extract year from path if available (more reliable than metadata for remakes)
+        let pathYear = null;
+        if (path) {
+            // Look for year in various formats in the path
+            const pathYearMatch = path.match(/[\\/\(\[\s](\d{4})[\)\]\s\.\-_]/);
+            if (pathYearMatch) {
+                pathYear = parseInt(pathYearMatch[1]);
+            }
+        }
 
-        if (!duplicatesByName[name.trim()]) duplicatesByName[name.trim()] = [];
-        duplicatesByName[name.trim()].push({ path, year, size: fileSize, resolution });
+        // Use path year if it exists and differs from metadata year, otherwise use metadata year
+        const effectiveYear = (pathYear && pathYear !== year && pathYear >= 1900 && pathYear <= new Date().getFullYear()) ? pathYear : year;
+
+        // Clean the movie name but be more conservative
+        const cleanName = name.trim()
+            .replace(/\s*\(\d{4}\)\s*/g, '') // Remove year in parentheses
+            .replace(/\b(1080p|720p|4k|uhd|hdr|x264|x265|hevc|bluray|blu-ray|webrip|web-dl|brrip)\b/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        
+        // Create a more specific key using EXACT name match + year
+        // This prevents different movies from being grouped together
+        const exactKey = `${name.trim()}_${effectiveYear || 'unknown'}`;
+        
+        if (!duplicates[exactKey]) duplicates[exactKey] = [];
+        duplicates[exactKey].push({ 
+            path, 
+            year, 
+            size: fileSize, 
+            resolution, 
+            originalName: name.trim(),
+            itemId: movie.Id,
+            effectiveYear: effectiveYear,
+            exactKey: exactKey
+        });
     });
 
+    // Only return groups that have multiple movies with IDENTICAL names and years
     const finalDuplicates = {};
-    for (const [key, paths] of Object.entries(duplicates)) {
-        if (paths.length > 1) finalDuplicates[key] = paths;
-    }
-
-    for (const [name, paths] of Object.entries(duplicatesByName)) {
-        if (paths.length > 1 && new Set(paths.map(p => p.year)).size > 1) {
-            finalDuplicates[name] = paths;
+    for (const [key, movies] of Object.entries(duplicates)) {
+        if (movies.length > 1) {
+            // Additional validation: ensure these are truly identical
+            const firstMovie = movies[0];
+            const allIdentical = movies.every(movie => 
+                movie.originalName === firstMovie.originalName && 
+                movie.effectiveYear === firstMovie.effectiveYear
+            );
+            
+            if (allIdentical) {
+                finalDuplicates[key] = movies;
+            }
         }
     }
 
     return finalDuplicates;
+}
+
+function normalizeMovieName(name) {
+    // Remove common edition/version indicators that don't change the core movie identity
+    let normalized = name
+        // Remove year in parentheses at the end
+        .replace(/\s*\(\d{4}\)\s*$/g, '')
+        // Remove edition types (case insensitive)
+        .replace(/\b(director'?s? cut|extended|unrated|theatrical|ultimate|special|remastered|redux|final cut|criterion|collector'?s?)\b/gi, '')
+        // Remove quality indicators
+        .replace(/\b(1080p|720p|4k|uhd|hdr|dts|ac3|x264|x265|hevc|bluray|blu-ray|dvdrip|webrip|web-dl|brrip|hdtv)\b/gi, '')
+        // Remove codec and container info
+        .replace(/\b(mkv|mp4|avi|mov|wmv|flv|m4v|divx|xvid)\b/gi, '')
+        // Remove audio channel info
+        .replace(/\b(5\.1|7\.1|2\.0|stereo|mono)\b/gi, '')
+        // Remove release group tags (usually in brackets or at the end)
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/\{[^}]*\}/g, '')
+        // Remove parentheses content that might contain quality info, but preserve important story info
+        .replace(/\([^)]*(?:1080p|720p|4k|uhd|hdr|dts|ac3|x264|x265|hevc|bluray|blu-ray|dvdrip|webrip|web-dl|brrip|hdtv|mkv|mp4|avi)[^)]*\)/gi, '')
+        // Remove common release tags
+        .replace(/\b(remux|internal|proper|repack|read\.nfo|nfo)\b/gi, '')
+        // Clean up multiple spaces and trim
+        .replace(/\s+/g, ' ')
+        .trim();
+    
+    return normalized;
+}
+
+function filterOutSequels(movies) {
+    // Since we're now using exact name + year matching, 
+    // this function is much simpler - just return all movies
+    // as they should already be true duplicates
+    return movies;
 }
 
 function displayResults(duplicateResults) {
@@ -129,17 +237,17 @@ function downloadDuplicates(libraryName, duplicates) {
         content += `${'-'.repeat(80)}\n`;
         
         // Create table header
-        content += `${'Path'.padEnd(70)} | ${'Year'.padEnd(6)} | ${'Size'.padEnd(10)} | ${'Resolution'.padEnd(12)}\n`;
-        content += `${'-'.repeat(70)} | ${'-'.repeat(6)} | ${'-'.repeat(10)} | ${'-'.repeat(12)}\n`;
+        content += `${'Movie Title'.padEnd(50)} | ${'Year'.padEnd(6)} | ${'Size'.padEnd(10)} | ${'Resolution'.padEnd(12)} | Full Path\n`;
+        content += `${'-'.repeat(50)} | ${'-'.repeat(6)} | ${'-'.repeat(10)} | ${'-'.repeat(12)} | ${'-'.repeat(80)}\n`;
         
         // Add each duplicate file
-        paths.forEach(({ path, year, size, resolution }) => {
+        paths.forEach(({ path, year, size, resolution, originalName, itemId }) => {
             const formattedSize = formatFileSize(size);
-            const fileName = path.split('\\').pop() || path.split('/').pop() || path;
-            const displayPath = fileName.length > 67 ? fileName.substring(0, 64) + '...' : fileName;
+            const movieTitle = originalName || 'Unknown';
+            const displayTitle = movieTitle.length > 47 ? movieTitle.substring(0, 44) + '...' : movieTitle;
             const displayYear = year ? year.toString() : 'N/A';
             
-            content += `${displayPath.padEnd(70)} | ${displayYear.padEnd(6)} | ${formattedSize.padEnd(10)} | ${resolution.padEnd(12)}\n`;
+            content += `${displayTitle.padEnd(50)} | ${displayYear.padEnd(6)} | ${formattedSize.padEnd(10)} | ${resolution.padEnd(12)} | ${path}\n`;
         });
         
         content += '\n';
@@ -233,7 +341,7 @@ function showDuplicatesHTML(libraryName, duplicates) {
         background: white;
         border-radius: 10px;
         padding: 30px;
-        max-width: 1200px;
+        max-width: 1400px;
         margin: 0 auto;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
         position: relative;
@@ -306,11 +414,13 @@ function showDuplicatesHTML(libraryName, duplicates) {
         const tableHeader = document.createElement('thead');
         tableHeader.innerHTML = `
             <tr style="background: #f1f2f6;">
-                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; color: #2c3e50;">Filename</th>
+                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; color: #2c3e50;">Movie Title</th>
                 <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 80px; color: #2c3e50;">Year</th>
                 <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 100px; color: #2c3e50;">Size</th>
                 <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 120px; color: #2c3e50;">Resolution</th>
                 <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 80px; color: #2c3e50;">Quality</th>
+                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; color: #2c3e50;">File Path</th>
+                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 100px; color: #2c3e50;">Action</th>
             </tr>
         `;
         
@@ -329,9 +439,9 @@ function showDuplicatesHTML(libraryName, duplicates) {
         });
         
         sortedPaths.forEach((item, index) => {
-            const { path, year, size, resolution } = item;
+            const { path, year, size, resolution, originalName, itemId } = item;
             const formattedSize = formatFileSize(size);
-            const fileName = path.split('\\').pop() || path.split('/').pop() || path;
+            const movieTitle = originalName || 'Unknown';
             const displayYear = year ? year.toString() : 'N/A';
             
             // Determine quality badge
@@ -360,17 +470,46 @@ function showDuplicatesHTML(libraryName, duplicates) {
                 ${index % 2 === 1 ? 'background: #f8f9fa;' : ''}
             `;
             
+            const deleteButtonId = `delete-btn-${itemId}`;
+            
             row.innerHTML = `
-                <td style="padding: 12px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 13px; color: #2c3e50;" title="${path}">${fileName}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; font-weight: 500; color: #2c3e50;">${movieTitle}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; color: #2c3e50;">${displayYear}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; font-weight: 500; color: #2c3e50;">${formattedSize}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; font-family: monospace; color: #2c3e50;">${resolution}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee;">
                     <span style="background: ${qualityColor}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: bold;">${qualityBadge}</span>
                 </td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; color: #34495e; word-break: break-all;" title="${path}">${path}</td>
+                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee;">
+                    <button id="${deleteButtonId}" style="
+                        background: #e74c3c;
+                        color: white;
+                        border: none;
+                        padding: 6px 12px;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        cursor: pointer;
+                        font-weight: 500;
+                        transition: background 0.2s;
+                    " onmouseover="this.style.background='#c0392b'" onmouseout="this.style.background='#e74c3c'">
+                        🗑️ Delete
+                    </button>
+                </td>
             `;
             
             tableBody.appendChild(row);
+            
+            // Add click event listener for the delete button
+            setTimeout(() => {
+                const deleteBtn = document.getElementById(deleteButtonId);
+                if (deleteBtn) {
+                    deleteBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        deleteMovieFromEmby(itemId, movieTitle, row);
+                    };
+                }
+            }, 0);
         });
         
         table.appendChild(tableHeader);
@@ -496,4 +635,187 @@ function importSettings() {
     };
     
     input.click();
+}
+
+// Function to delete a movie from Emby library
+async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
+    const embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    const apiKey = document.getElementById('apiKey').value;
+    
+    if (!embyServerUrl || !apiKey) {
+        alert('Emby server URL and API key are required for deletion');
+        return;
+    }
+    
+    // Confirm deletion
+    if (!confirm(`Are you sure you want to delete "${movieTitle}" from your Emby library?\n\nThis will remove the movie from Emby but may not delete the actual file from your NAS.`)) {
+        return;
+    }
+    
+    try {
+        // Disable the delete button to prevent multiple clicks
+        const deleteBtn = rowElement.querySelector('button');
+        if (deleteBtn) {
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Deleting...';
+            deleteBtn.style.background = '#95a5a6';
+        }
+        
+        let serverUrl = embyServerUrl;
+        if (!/^https?:\/\//i.test(serverUrl)) {
+            serverUrl = 'http://' + serverUrl;
+        }
+        
+        const response = await fetch(`${serverUrl}/emby/Items/${itemId}?api_key=${apiKey}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            // Success - remove the row from the table
+            rowElement.style.transition = 'opacity 0.3s, transform 0.3s';
+            rowElement.style.opacity = '0.5';
+            rowElement.style.transform = 'scale(0.95)';
+            
+            setTimeout(() => {
+                rowElement.remove();
+                
+                // Check if this was the last row in the duplicate set
+                const table = rowElement.closest('table');
+                const remainingRows = table.querySelectorAll('tbody tr').length;
+                
+                if (remainingRows === 0) {
+                    // Remove the entire duplicate set if no movies remain
+                    const duplicateSet = table.closest('div');
+                    duplicateSet.style.transition = 'opacity 0.3s, transform 0.3s';
+                    duplicateSet.style.opacity = '0';
+                    duplicateSet.style.transform = 'scale(0.95)';
+                    
+                    setTimeout(() => {
+                        duplicateSet.remove();
+                        
+                        // Update the header count
+                        updateDuplicateCount();
+                    }, 300);
+                }
+            }, 300);
+            
+            // Show success message
+            showNotification(`"${movieTitle}" has been successfully deleted from Emby library`, 'success');
+            
+        } else if (response.status === 404) {
+            showNotification(`Movie "${movieTitle}" was not found in Emby (may have already been deleted)`, 'warning');
+            rowElement.remove();
+        } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+    } catch (error) {
+        console.error('Error deleting movie:', error);
+        showNotification(`Failed to delete "${movieTitle}": ${error.message}`, 'error');
+        
+        // Re-enable the button on error
+        const deleteBtn = rowElement.querySelector('button');
+        if (deleteBtn) {
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = '🗑️ Delete';
+            deleteBtn.style.background = '#e74c3c';
+        }
+    }
+}
+
+// Function to show notifications
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        border-radius: 8px;
+        color: white;
+        font-weight: 500;
+        z-index: 10000;
+        max-width: 400px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        animation: slideIn 0.3s ease-out;
+    `;
+    
+    // Set background color based on type
+    switch (type) {
+        case 'success':
+            notification.style.background = '#27ae60';
+            break;
+        case 'error':
+            notification.style.background = '#e74c3c';
+            break;
+        case 'warning':
+            notification.style.background = '#f39c12';
+            break;
+        default:
+            notification.style.background = '#3498db';
+    }
+    
+    notification.textContent = message;
+    
+    // Add slide-in animation
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+    `;
+    document.head.appendChild(style);
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        notification.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    }, 5000);
+    
+    // Allow manual dismissal by clicking
+    notification.onclick = () => {
+        notification.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    };
+}
+
+// Function to update duplicate count in the modal header
+function updateDuplicateCount() {
+    const modal = document.querySelector('div[style*="position: fixed"]');
+    if (modal) {
+        const duplicatesContainer = modal.querySelector('div').children[1]; // Get duplicates container
+        const remainingSets = duplicatesContainer.querySelectorAll('div[style*="margin-bottom: 30px"]').length;
+        const totalFiles = duplicatesContainer.querySelectorAll('tbody tr').length;
+        
+        const header = modal.querySelector('h2').nextElementSibling;
+        header.innerHTML = `Found ${remainingSets} duplicate sets with ${totalFiles} total files`;
+        
+        // If no duplicates remain, show completion message
+        if (remainingSets === 0) {
+            duplicatesContainer.innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #27ae60;">
+                    <h3>🎉 All duplicates have been removed!</h3>
+                    <p>You can close this window now.</p>
+                </div>
+            `;
+        }
+    }
 }
