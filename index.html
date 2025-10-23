@@ -12,8 +12,12 @@
         <h1>Emby Duplicate Finder</h1>
         <div class="input-group">
             <input type="text" id="embyServerUrl" placeholder="Emby Server URL www.domain.com || IP:8096 || locahost:8096">
-            <input type="text" id="apiKey" placeholder="API Key">
-            <button onclick="findDuplicates()">Find Duplicate Movies</button>
+            <input type="password" id="apiKey" placeholder="API Key">
+            <div class="button-group">
+                <button onclick="findDuplicates()">Find Duplicate Movies</button>
+                <button onclick="openEmby()">Open Emby</button>
+                <button onclick="refreshLibrary()">Refresh Library</button>
+            </div>
         </div>
         <div id="results"></div>
     </div>

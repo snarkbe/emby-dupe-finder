@@ -49,6 +49,39 @@ async function fetchMoviesFromLibrary(embyServerUrl, apiKey, libraryId) {
     return data.Items || [];
 }
 
+async function refreshLibrary() {
+    let embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    const apiKey = document.getElementById('apiKey').value;
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const resultsDiv = document.getElementById('results');
+
+    if (!/^https?:\/\//i.test(embyServerUrl)) {
+        embyServerUrl = 'http://' + embyServerUrl;
+    }
+
+    loadingOverlay.classList.remove('hidden');
+    resultsDiv.innerHTML = '';
+
+    try {
+        const response = await fetch(`${embyServerUrl}/emby/Library/Refresh`, {
+            method: 'POST',
+            headers: {
+                'X-Emby-Token': apiKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to refresh library');
+        }
+
+        resultsDiv.innerHTML = '<p>Library refresh triggered successfully!</p>';
+    } catch (error) {
+        resultsDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+    } finally {
+        loadingOverlay.classList.add('hidden');
+    }
+}
+
 // Utility functions for improved duplicate detection
 function calculateSimilarity(str1, str2) {
     // Simple Levenshtein distance-based similarity
@@ -210,7 +243,35 @@ function displayResults(duplicateResults) {
     resultsDiv.innerHTML = '';
 
     if (duplicateResults.length === 0) {
-        resultsDiv.innerHTML = '<p>No duplicates found in any library.</p>';
+        resultsDiv.innerHTML = `
+            <div style="
+                background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+                color: white;
+                padding: 40px 30px;
+                border-radius: 12px;
+                text-align: center;
+                box-shadow: 0 8px 25px rgba(116, 185, 255, 0.3);
+                margin: 20px 0;
+                animation: fadeInUp 0.6s ease-out;
+            ">
+                <div style="font-size: 48px; margin-bottom: 15px;">🎉</div>
+                <h3 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600;">Great News!</h3>
+                <p style="margin: 0; font-size: 16px; opacity: 0.9;">No duplicate movies found in any of your libraries.</p>
+                <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Your media collection is perfectly organized!</p>
+            </div>
+            <style>
+                @keyframes fadeInUp {
+                    from {
+                        opacity: 0;
+                        transform: translateY(30px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                }
+            </style>
+        `;
         return;
     }
 
@@ -666,12 +727,37 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
             serverUrl = 'http://' + serverUrl;
         }
         
-        const response = await fetch(`${serverUrl}/emby/Items/${itemId}?api_key=${apiKey}`, {
+        // Clean up the server URL - remove trailing slashes
+        serverUrl = serverUrl.replace(/\/+$/, '');
+        
+        // First, get the current user info to use for the delete request
+        const userResponse = await fetch(`${serverUrl}/emby/Users?api_key=${apiKey}`);
+        if (!userResponse.ok) {
+            throw new Error('Failed to get user information');
+        }
+        const users = await userResponse.json();
+        
+        // Find an admin user or use the first user
+        const user = users.find(u => u.Policy && u.Policy.IsAdministrator) || users[0];
+        if (!user) {
+            throw new Error('No user found for deletion operation');
+        }
+        
+        // Construct the delete URL with user ID
+        const deleteUrl = `${serverUrl}/emby/Items/${itemId}?api_key=${apiKey}&user=${user.Id}`;
+        
+        console.log('Attempting to delete:', deleteUrl); // Debug log
+        
+        const response = await fetch(deleteUrl, {
             method: 'DELETE',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Emby UserId="${user.Id}", Client="EmbyDupeFinder", Device="WebBrowser", DeviceId="emby-dupe-finder", Version="1.0.0"`
             }
         });
+        
+        console.log('Delete response status:', response.status); // Debug log
         
         if (response.ok) {
             // Success - remove the row from the table
@@ -709,7 +795,18 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
             showNotification(`Movie "${movieTitle}" was not found in Emby (may have already been deleted)`, 'warning');
             rowElement.remove();
         } else {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            // Get more details about the error
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            try {
+                const errorBody = await response.text();
+                if (errorBody) {
+                    console.log('Error response body:', errorBody); // Debug log
+                    errorMessage += ` - ${errorBody}`;
+                }
+            } catch (e) {
+                // Ignore if we can't read the error body
+            }
+            throw new Error(errorMessage);
         }
         
     } catch (error) {
@@ -818,4 +915,21 @@ function updateDuplicateCount() {
             `;
         }
     }
+}
+
+function openEmby() {
+    let embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    
+    if (!embyServerUrl) {
+        alert('Please enter an Emby Server URL first');
+        return;
+    }
+    
+    // Add http:// if no protocol specified
+    if (!/^https?:\/\//i.test(embyServerUrl)) {
+        embyServerUrl = 'http://' + embyServerUrl;
+    }
+    
+    // Open Emby in a new tab
+    window.open(embyServerUrl, '_blank');
 }
