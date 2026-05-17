@@ -37,13 +37,17 @@ async function findDuplicates() {
 }
 
 async function fetchLibraries(embyServerUrl, apiKey) {
-    const response = await fetch(`${embyServerUrl}/emby/Library/VirtualFolders?api_key=${apiKey}`);
+    const response = await fetch(`${embyServerUrl}/emby/Library/VirtualFolders`, {
+        headers: { 'X-Emby-Token': apiKey }
+    });
     if (!response.ok) throw new Error('Failed to fetch libraries');
     return await response.json();
 }
 
 async function fetchMoviesFromLibrary(embyServerUrl, apiKey, libraryId) {
-    const response = await fetch(`${embyServerUrl}/emby/Items?Recursive=true&ParentId=${libraryId}&IncludeItemTypes=Movie&Fields=Path,ProductionYear,RunTimeTicks,MediaSources,MediaStreams&api_key=${apiKey}`);
+    const response = await fetch(`${embyServerUrl}/emby/Items?Recursive=true&ParentId=${libraryId}&IncludeItemTypes=Movie&Fields=Path,ProductionYear,RunTimeTicks,MediaSources,MediaStreams`, {
+        headers: { 'X-Emby-Token': apiKey }
+    });
     if (!response.ok) throw new Error(`Failed to fetch movies from library ${libraryId}`);
     const data = await response.json();
     return data.Items || [];
@@ -279,12 +283,25 @@ function displayResults(duplicateResults) {
         const libraryBox = document.createElement('div');
         libraryBox.className = 'library-box';
         libraryBox.style.animationDelay = `${index * 0.1}s`;
-        libraryBox.innerHTML = `
-            <h3>${result.libraryName}</h3>
-            <p>Total duplicate movies: ${result.count}</p>
-            <button onclick="showDuplicatesHTML('${result.libraryName}', ${JSON.stringify(result.duplicates).replace(/"/g, '&quot;')})">View Details</button>
-            <button onclick="downloadDuplicates('${result.libraryName}', ${JSON.stringify(result.duplicates).replace(/"/g, '&quot;')})">Download List</button>
-        `;
+
+        const h3 = document.createElement('h3');
+        h3.textContent = result.libraryName;
+
+        const p = document.createElement('p');
+        p.textContent = `Total duplicate movies: ${result.count}`;
+
+        const viewBtn = document.createElement('button');
+        viewBtn.textContent = 'View Details';
+        viewBtn.onclick = () => showDuplicatesHTML(result.libraryName, result.duplicates);
+
+        const downloadBtn = document.createElement('button');
+        downloadBtn.textContent = 'Download List';
+        downloadBtn.onclick = () => downloadDuplicates(result.libraryName, result.duplicates);
+
+        libraryBox.appendChild(h3);
+        libraryBox.appendChild(p);
+        libraryBox.appendChild(viewBtn);
+        libraryBox.appendChild(downloadBtn);
         resultsDiv.appendChild(libraryBox);
     });
 }
@@ -383,6 +400,7 @@ document.addEventListener('DOMContentLoaded', setDefaultValues);
 function showDuplicatesHTML(libraryName, duplicates) {
     // Create modal overlay
     const modal = document.createElement('div');
+    modal.id = 'modal-overlay';
     modal.style.cssText = `
         position: fixed;
         top: 0;
@@ -433,17 +451,24 @@ function showDuplicatesHTML(libraryName, duplicates) {
     
     // Create header
     const header = document.createElement('div');
-    header.innerHTML = `
-        <h2 style="margin: 0 0 20px 0; color: #2c3e50;">Duplicates in "${libraryName}"</h2>
-        <p style="margin: 0 0 30px 0; color: #7f8c8d;">Found ${Object.keys(duplicates).length} duplicate sets with ${Object.values(duplicates).reduce((sum, paths) => sum + paths.length, 0)} total files</p>
-    `;
+    const h2 = document.createElement('h2');
+    h2.style.cssText = 'margin: 0 0 20px 0; color: #2c3e50;';
+    h2.textContent = `Duplicates in "${libraryName}"`;
+    const countPara = document.createElement('p');
+    countPara.id = 'duplicate-count';
+    countPara.style.cssText = 'margin: 0 0 30px 0; color: #7f8c8d;';
+    countPara.textContent = `Found ${Object.keys(duplicates).length} duplicate sets with ${Object.values(duplicates).reduce((sum, paths) => sum + paths.length, 0)} total files`;
+    header.appendChild(h2);
+    header.appendChild(countPara);
     
     // Create duplicates container
     const duplicatesContainer = document.createElement('div');
+    duplicatesContainer.id = 'duplicates-container';
     
     for (const [key, paths] of Object.entries(duplicates)) {
         // Create duplicate set container
         const duplicateSet = document.createElement('div');
+        duplicateSet.className = 'duplicate-set';
         duplicateSet.style.cssText = `
             margin-bottom: 30px;
             border: 1px solid #e1e8ed;
@@ -531,8 +556,6 @@ function showDuplicatesHTML(libraryName, duplicates) {
                 ${index % 2 === 1 ? 'background: #f8f9fa;' : ''}
             `;
             
-            const deleteButtonId = `delete-btn-${itemId}`;
-            
             row.innerHTML = `
                 <td style="padding: 12px; border-bottom: 1px solid #eee; font-weight: 500; color: #2c3e50;">${movieTitle}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; color: #2c3e50;">${displayYear}</td>
@@ -543,7 +566,7 @@ function showDuplicatesHTML(libraryName, duplicates) {
                 </td>
                 <td style="padding: 12px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; color: #34495e; word-break: break-all;" title="${path}">${path}</td>
                 <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee;">
-                    <button id="${deleteButtonId}" style="
+                    <button style="
                         background: #e74c3c;
                         color: white;
                         border: none;
@@ -560,17 +583,14 @@ function showDuplicatesHTML(libraryName, duplicates) {
             `;
             
             tableBody.appendChild(row);
-            
-            // Add click event listener for the delete button
-            setTimeout(() => {
-                const deleteBtn = document.getElementById(deleteButtonId);
-                if (deleteBtn) {
-                    deleteBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        deleteMovieFromEmby(itemId, movieTitle, row);
-                    };
-                }
-            }, 0);
+
+            const deleteBtn = row.querySelector('button');
+            if (deleteBtn) {
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteMovieFromEmby(itemId, movieTitle, row);
+                };
+            }
         });
         
         table.appendChild(tableHeader);
@@ -729,35 +749,15 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
         
         // Clean up the server URL - remove trailing slashes
         serverUrl = serverUrl.replace(/\/+$/, '');
-        
-        // First, get the current user info to use for the delete request
-        const userResponse = await fetch(`${serverUrl}/emby/Users?api_key=${apiKey}`);
-        if (!userResponse.ok) {
-            throw new Error('Failed to get user information');
-        }
-        const users = await userResponse.json();
-        
-        // Find an admin user or use the first user
-        const user = users.find(u => u.Policy && u.Policy.IsAdministrator) || users[0];
-        if (!user) {
-            throw new Error('No user found for deletion operation');
-        }
-        
-        // Construct the delete URL with user ID
-        const deleteUrl = `${serverUrl}/emby/Items/${itemId}?api_key=${apiKey}&user=${user.Id}`;
-        
-        console.log('Attempting to delete:', deleteUrl); // Debug log
-        
-        const response = await fetch(deleteUrl, {
+
+        const response = await fetch(`${serverUrl}/emby/Items/${itemId}`, {
             method: 'DELETE',
             headers: {
+                'X-Emby-Token': apiKey,
                 'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Authorization': `Emby UserId="${user.Id}", Client="EmbyDupeFinder", Device="WebBrowser", DeviceId="emby-dupe-finder", Version="1.0.0"`
+                'Accept': 'application/json'
             }
         });
-        
-        console.log('Delete response status:', response.status); // Debug log
         
         if (response.ok) {
             // Success - remove the row from the table
@@ -800,7 +800,6 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
             try {
                 const errorBody = await response.text();
                 if (errorBody) {
-                    console.log('Error response body:', errorBody); // Debug log
                     errorMessage += ` - ${errorBody}`;
                 }
             } catch (e) {
@@ -896,24 +895,24 @@ function showNotification(message, type = 'info') {
 
 // Function to update duplicate count in the modal header
 function updateDuplicateCount() {
-    const modal = document.querySelector('div[style*="position: fixed"]');
-    if (modal) {
-        const duplicatesContainer = modal.querySelector('div').children[1]; // Get duplicates container
-        const remainingSets = duplicatesContainer.querySelectorAll('div[style*="margin-bottom: 30px"]').length;
-        const totalFiles = duplicatesContainer.querySelectorAll('tbody tr').length;
-        
-        const header = modal.querySelector('h2').nextElementSibling;
-        header.innerHTML = `Found ${remainingSets} duplicate sets with ${totalFiles} total files`;
-        
-        // If no duplicates remain, show completion message
-        if (remainingSets === 0) {
-            duplicatesContainer.innerHTML = `
-                <div style="text-align: center; padding: 40px; color: #27ae60;">
-                    <h3>🎉 All duplicates have been removed!</h3>
-                    <p>You can close this window now.</p>
-                </div>
-            `;
-        }
+    const duplicatesContainer = document.getElementById('duplicates-container');
+    if (!duplicatesContainer) return;
+
+    const remainingSets = duplicatesContainer.querySelectorAll('.duplicate-set').length;
+    const totalFiles = duplicatesContainer.querySelectorAll('tbody tr').length;
+
+    const countPara = document.getElementById('duplicate-count');
+    if (countPara) {
+        countPara.textContent = `Found ${remainingSets} duplicate sets with ${totalFiles} total files`;
+    }
+
+    if (remainingSets === 0) {
+        duplicatesContainer.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #27ae60;">
+                <h3>🎉 All duplicates have been removed!</h3>
+                <p>You can close this window now.</p>
+            </div>
+        `;
     }
 }
 

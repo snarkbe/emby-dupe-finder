@@ -156,7 +156,7 @@ button:hover {
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0f, 18, 25, 0.9);
+    background-color: rgba(15, 18, 25, 0.9);
     display: flex;
     flex-direction: column;
     justify-content: center;
