@@ -395,7 +395,13 @@ function setDefaultValues() {
 }
 
 // Set default values when the page loads
-document.addEventListener('DOMContentLoaded', setDefaultValues);
+document.addEventListener('DOMContentLoaded', () => {
+    setDefaultValues();
+    // Add event listeners for buttons
+    document.getElementById('find-duplicates-btn').addEventListener('click', findDuplicates);
+    document.getElementById('open-emby-btn').addEventListener('click', openEmby);
+    document.getElementById('refresh-library-btn').addEventListener('click', refreshLibrary);
+});
 
 function showDuplicatesHTML(libraryName, duplicates) {
     // Create modal overlay
