@@ -1,15 +1,29 @@
+const DELETE_LABEL = '🗑️ Delete';
+
+// Read the server URL from the form: adds http:// when no protocol is given
+// and strips trailing slashes. Returns '' when the field is empty.
+function getServerUrl() {
+    let url = document.getElementById('embyServerUrl').value.trim();
+    if (!url) return '';
+    if (!/^https?:\/\//i.test(url)) {
+        url = 'http://' + url;
+    }
+    return url.replace(/\/+$/, '');
+}
+
 async function findDuplicates() {
-    let embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    const embyServerUrl = getServerUrl();
     const apiKey = document.getElementById('apiKey').value;
     const resultsDiv = document.getElementById('results');
     const loadingOverlay = document.getElementById('loading-overlay');
 
+    if (!embyServerUrl) {
+        resultsDiv.innerHTML = '<p>Error: Please enter an Emby Server URL first</p>';
+        return;
+    }
+
     resultsDiv.innerHTML = '';
     loadingOverlay.classList.remove('hidden');
-
-    if (!/^https?:\/\//i.test(embyServerUrl)) {
-        embyServerUrl = 'http://' + embyServerUrl;
-    }
 
     try {
         const libraries = await fetchLibraries(embyServerUrl, apiKey);
@@ -54,13 +68,14 @@ async function fetchMoviesFromLibrary(embyServerUrl, apiKey, libraryId) {
 }
 
 async function refreshLibrary() {
-    let embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    const embyServerUrl = getServerUrl();
     const apiKey = document.getElementById('apiKey').value;
     const loadingOverlay = document.getElementById('loading-overlay');
     const resultsDiv = document.getElementById('results');
 
-    if (!/^https?:\/\//i.test(embyServerUrl)) {
-        embyServerUrl = 'http://' + embyServerUrl;
+    if (!embyServerUrl) {
+        resultsDiv.innerHTML = '<p>Error: Please enter an Emby Server URL first</p>';
+        return;
     }
 
     loadingOverlay.classList.remove('hidden');
@@ -86,46 +101,6 @@ async function refreshLibrary() {
     }
 }
 
-// Utility functions for improved duplicate detection
-function calculateSimilarity(str1, str2) {
-    // Simple Levenshtein distance-based similarity
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
-    
-    if (longer.length === 0) return 1.0;
-    
-    const distance = levenshteinDistance(longer, shorter);
-    return (longer.length - distance) / longer.length;
-}
-
-function levenshteinDistance(str1, str2) {
-    const matrix = [];
-    
-    for (let i = 0; i <= str2.length; i++) {
-        matrix[i] = [i];
-    }
-    
-    for (let j = 0; j <= str1.length; j++) {
-        matrix[0][j] = j;
-    }
-    
-    for (let i = 1; i <= str2.length; i++) {
-        for (let j = 1; j <= str1.length; j++) {
-            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j] + 1
-                );
-            }
-        }
-    }
-    
-    return matrix[str2.length][str1.length];
-}
-
 function findDuplicatesInLibrary(movies) {
     const duplicates = {};
 
@@ -134,22 +109,14 @@ function findDuplicatesInLibrary(movies) {
         const year = movie.ProductionYear;
         const path = movie.Path;
         
-        // Get file size from MediaSources
-        let fileSize = 0;
-        if (movie.MediaSources && movie.MediaSources.length > 0) {
-            fileSize = movie.MediaSources[0].Size || 0;
-        }
-
-        // Get resolution from MediaStreams
-        let resolution = 'Unknown';
-        if (movie.MediaStreams && movie.MediaStreams.length > 0) {
-            const videoStream = movie.MediaStreams.find(stream => stream.Type === 'Video');
-            if (videoStream && videoStream.Width && videoStream.Height) {
-                resolution = `${videoStream.Width}x${videoStream.Height}`;
-            }
-        }
-
         if (!name) return;
+
+        // An item with several MediaSources holds versions merged by Emby:
+        // each version is listed as its own entry so it can be compared
+        const sources = (movie.MediaSources && movie.MediaSources.length > 0)
+            ? movie.MediaSources
+            : [{ Path: path, Size: 0, MediaStreams: movie.MediaStreams }];
+        const mergedVersions = sources.length > 1 ? sources.length : 0;
 
         // Extract year from path if available (more reliable than metadata for remakes)
         let pathYear = null;
@@ -164,27 +131,39 @@ function findDuplicatesInLibrary(movies) {
         // Use path year if it exists and differs from metadata year, otherwise use metadata year
         const effectiveYear = (pathYear && pathYear !== year && pathYear >= 1900 && pathYear <= new Date().getFullYear()) ? pathYear : year;
 
-        // Clean the movie name but be more conservative
-        const cleanName = name.trim()
-            .replace(/\s*\(\d{4}\)\s*/g, '') // Remove year in parentheses
-            .replace(/\b(1080p|720p|4k|uhd|hdr|x264|x265|hevc|bluray|blu-ray|webrip|web-dl|brrip)\b/gi, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-        
         // Create a more specific key using EXACT name match + year
         // This prevents different movies from being grouped together
         const exactKey = `${name.trim()}_${effectiveYear || 'unknown'}`;
         
         if (!duplicates[exactKey]) duplicates[exactKey] = [];
-        duplicates[exactKey].push({ 
-            path, 
-            year, 
-            size: fileSize, 
-            resolution, 
-            originalName: name.trim(),
-            itemId: movie.Id,
-            effectiveYear: effectiveYear,
-            exactKey: exactKey
+        sources.forEach(source => {
+            // Get resolution from the version's MediaStreams (item level as fallback)
+            let resolution = 'Unknown';
+            let width = 0;
+            let height = 0;
+            const streams = (source.MediaStreams && source.MediaStreams.length > 0)
+                ? source.MediaStreams
+                : (!mergedVersions && movie.MediaStreams) || [];
+            const videoStream = streams.find(stream => stream.Type === 'Video');
+            if (videoStream && videoStream.Width && videoStream.Height) {
+                width = videoStream.Width;
+                height = videoStream.Height;
+                resolution = `${width}x${height}`;
+            }
+
+            duplicates[exactKey].push({
+                path: source.Path || path,
+                year,
+                size: source.Size || 0,
+                resolution,
+                width,
+                height,
+                originalName: name.trim(),
+                itemId: movie.Id,
+                mergedVersions,
+                effectiveYear: effectiveYear,
+                exactKey: exactKey
+            });
         });
     });
 
@@ -208,73 +187,18 @@ function findDuplicatesInLibrary(movies) {
     return finalDuplicates;
 }
 
-function normalizeMovieName(name) {
-    // Remove common edition/version indicators that don't change the core movie identity
-    let normalized = name
-        // Remove year in parentheses at the end
-        .replace(/\s*\(\d{4}\)\s*$/g, '')
-        // Remove edition types (case insensitive)
-        .replace(/\b(director'?s? cut|extended|unrated|theatrical|ultimate|special|remastered|redux|final cut|criterion|collector'?s?)\b/gi, '')
-        // Remove quality indicators
-        .replace(/\b(1080p|720p|4k|uhd|hdr|dts|ac3|x264|x265|hevc|bluray|blu-ray|dvdrip|webrip|web-dl|brrip|hdtv)\b/gi, '')
-        // Remove codec and container info
-        .replace(/\b(mkv|mp4|avi|mov|wmv|flv|m4v|divx|xvid)\b/gi, '')
-        // Remove audio channel info
-        .replace(/\b(5\.1|7\.1|2\.0|stereo|mono)\b/gi, '')
-        // Remove release group tags (usually in brackets or at the end)
-        .replace(/\[[^\]]*\]/g, '')
-        .replace(/\{[^}]*\}/g, '')
-        // Remove parentheses content that might contain quality info, but preserve important story info
-        .replace(/\([^)]*(?:1080p|720p|4k|uhd|hdr|dts|ac3|x264|x265|hevc|bluray|blu-ray|dvdrip|webrip|web-dl|brrip|hdtv|mkv|mp4|avi)[^)]*\)/gi, '')
-        // Remove common release tags
-        .replace(/\b(remux|internal|proper|repack|read\.nfo|nfo)\b/gi, '')
-        // Clean up multiple spaces and trim
-        .replace(/\s+/g, ' ')
-        .trim();
-    
-    return normalized;
-}
-
-function filterOutSequels(movies) {
-    // Since we're now using exact name + year matching, 
-    // this function is much simpler - just return all movies
-    // as they should already be true duplicates
-    return movies;
-}
-
 function displayResults(duplicateResults) {
     const resultsDiv = document.getElementById('results');
     resultsDiv.innerHTML = '';
 
     if (duplicateResults.length === 0) {
         resultsDiv.innerHTML = `
-            <div style="
-                background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
-                color: white;
-                padding: 40px 30px;
-                border-radius: 12px;
-                text-align: center;
-                box-shadow: 0 8px 25px rgba(116, 185, 255, 0.3);
-                margin: 20px 0;
-                animation: fadeInUp 0.6s ease-out;
-            ">
-                <div style="font-size: 48px; margin-bottom: 15px;">🎉</div>
-                <h3 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600;">Great News!</h3>
-                <p style="margin: 0; font-size: 16px; opacity: 0.9;">No duplicate movies found in any of your libraries.</p>
-                <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Your media collection is perfectly organized!</p>
+            <div class="no-duplicates">
+                <div class="icon">🎉</div>
+                <h3>Great News!</h3>
+                <p>No duplicate movies found in any of your libraries.</p>
+                <p class="subtitle">Your media collection is perfectly organized!</p>
             </div>
-            <style>
-                @keyframes fadeInUp {
-                    from {
-                        opacity: 0;
-                        transform: translateY(30px);
-                    }
-                    to {
-                        opacity: 1;
-                        transform: translateY(0);
-                    }
-                }
-            </style>
         `;
         return;
     }
@@ -319,13 +243,13 @@ function downloadDuplicates(libraryName, duplicates) {
         content += `${'-'.repeat(50)} | ${'-'.repeat(6)} | ${'-'.repeat(10)} | ${'-'.repeat(12)} | ${'-'.repeat(80)}\n`;
         
         // Add each duplicate file
-        paths.forEach(({ path, year, size, resolution, originalName, itemId }) => {
+        paths.forEach(({ path, year, size, resolution, originalName, itemId, mergedVersions }) => {
             const formattedSize = formatFileSize(size);
             const movieTitle = originalName || 'Unknown';
             const displayTitle = movieTitle.length > 47 ? movieTitle.substring(0, 44) + '...' : movieTitle;
             const displayYear = year ? year.toString() : 'N/A';
             
-            content += `${displayTitle.padEnd(50)} | ${displayYear.padEnd(6)} | ${formattedSize.padEnd(10)} | ${resolution.padEnd(12)} | ${path}\n`;
+            content += `${displayTitle.padEnd(50)} | ${displayYear.padEnd(6)} | ${formattedSize.padEnd(10)} | ${resolution.padEnd(12)} | ${path}${mergedVersions ? '  [merged version]' : ''}\n`;
         });
         
         content += '\n';
@@ -347,6 +271,16 @@ function downloadDuplicates(libraryName, duplicates) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// Classify by width OR height so cropped widescreen (e.g. 3840x1600, 1920x800)
+// and pillarboxed 4:3 (e.g. 1440x1080) encodes get the right label
+function getQualityBadge(width, height) {
+    if (!width || !height) return { label: '?', className: 'quality-unknown' };
+    if (width >= 3200 || height >= 1800) return { label: '4K', className: 'quality-4k' };
+    if (width >= 1800 || height >= 1000) return { label: '1080p', className: 'quality-1080p' };
+    if (width >= 1200 || height >= 700) return { label: '720p', className: 'quality-720p' };
+    return { label: 'SD', className: 'quality-sd' };
 }
 
 function escapeHtml(str) {
@@ -412,63 +346,25 @@ document.addEventListener('DOMContentLoaded', () => {
 function showDuplicatesHTML(libraryName, duplicates) {
     // Create modal overlay
     const modal = document.createElement('div');
-    modal.id = 'modal-overlay';
-    modal.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background-color: rgba(0, 0, 0, 0.8);
-        z-index: 1000;
-        overflow-y: auto;
-        padding: 20px;
-        box-sizing: border-box;
-    `;
-    
+    modal.className = 'modal-overlay';
+
     // Create modal content
     const modalContent = document.createElement('div');
-    modalContent.style.cssText = `
-        background: white;
-        border-radius: 10px;
-        padding: 30px;
-        max-width: 1400px;
-        margin: 0 auto;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-        position: relative;
-    `;
-    
+    modalContent.className = 'modal-content';
+
     // Create close button
     const closeButton = document.createElement('button');
-    closeButton.innerHTML = '✕';
-    closeButton.style.cssText = `
-        position: absolute;
-        top: 15px;
-        right: 20px;
-        background: #ff4757;
-        color: white;
-        border: none;
-        border-radius: 50%;
-        width: 30px;
-        height: 30px;
-        font-size: 16px;
-        cursor: pointer;
-        font-weight: bold;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        line-height: 1;
-    `;
-    closeButton.onclick = () => document.body.removeChild(modal);
-    
+    closeButton.className = 'modal-close';
+    closeButton.textContent = '✕';
+
     // Create header
     const header = document.createElement('div');
     const h2 = document.createElement('h2');
-    h2.style.cssText = 'margin: 0 0 20px 0; color: #2c3e50;';
+    h2.className = 'modal-title';
     h2.textContent = `Duplicates in "${libraryName}"`;
     const countPara = document.createElement('p');
     countPara.id = 'duplicate-count';
-    countPara.style.cssText = 'margin: 0 0 30px 0; color: #7f8c8d;';
+    countPara.className = 'modal-count';
     countPara.textContent = `Found ${Object.keys(duplicates).length} duplicate sets with ${Object.values(duplicates).reduce((sum, paths) => sum + paths.length, 0)} total files`;
     header.appendChild(h2);
     header.appendChild(countPara);
@@ -481,44 +377,27 @@ function showDuplicatesHTML(libraryName, duplicates) {
         // Create duplicate set container
         const duplicateSet = document.createElement('div');
         duplicateSet.className = 'duplicate-set';
-        duplicateSet.style.cssText = `
-            margin-bottom: 30px;
-            border: 1px solid #e1e8ed;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #f8f9fa;
-        `;
-        
+
         // Create set header
         const setHeader = document.createElement('div');
-        setHeader.style.cssText = `
-            background: #3498db;
-            color: white;
-            padding: 15px 20px;
-            font-weight: bold;
-            font-size: 16px;
-        `;
+        setHeader.className = 'duplicate-set-header';
         setHeader.textContent = `Duplicate Set: ${key}`;
-        
+
         // Create table
         const table = document.createElement('table');
-        table.style.cssText = `
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-        `;
-        
+        table.className = 'duplicate-table';
+
         // Create table header
         const tableHeader = document.createElement('thead');
         tableHeader.innerHTML = `
-            <tr style="background: #f1f2f6;">
-                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; color: #2c3e50;">Movie Title</th>
-                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 80px; color: #2c3e50;">Year</th>
-                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 100px; color: #2c3e50;">Size</th>
-                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 120px; color: #2c3e50;">Resolution</th>
-                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 80px; color: #2c3e50;">Quality</th>
-                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; color: #2c3e50;">File Path</th>
-                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd; font-weight: 600; width: 100px; color: #2c3e50;">Action</th>
+            <tr>
+                <th class="col-title">Movie Title</th>
+                <th class="col-year">Year</th>
+                <th class="col-size">Size</th>
+                <th class="col-resolution">Resolution</th>
+                <th class="col-quality">Quality</th>
+                <th class="col-path">File Path</th>
+                <th class="col-action">Action</th>
             </tr>
         `;
         
@@ -527,76 +406,39 @@ function showDuplicatesHTML(libraryName, duplicates) {
         
         // Sort paths by resolution (highest first), then by size (largest first)
         const sortedPaths = paths.sort((a, b) => {
-            const aPixels = a.resolution !== 'Unknown' ? 
-                parseInt(a.resolution.split('x')[0]) * parseInt(a.resolution.split('x')[1]) : 0;
-            const bPixels = b.resolution !== 'Unknown' ? 
-                parseInt(b.resolution.split('x')[0]) * parseInt(b.resolution.split('x')[1]) : 0;
+            const aPixels = a.width * a.height;
+            const bPixels = b.width * b.height;
             
             if (aPixels !== bPixels) return bPixels - aPixels;
             return b.size - a.size;
         });
         
-        sortedPaths.forEach((item, index) => {
-            const { path, year, size, resolution, originalName, itemId } = item;
+        sortedPaths.forEach(item => {
+            const { path, year, size, resolution, width, height, originalName, itemId, mergedVersions } = item;
             const formattedSize = formatFileSize(size);
             const movieTitle = originalName || 'Unknown';
             const displayYear = year ? year.toString() : 'N/A';
-            
-            // Determine quality badge
-            let qualityBadge = '';
-            let qualityColor = '#95a5a6';
-            
-            if (resolution.includes('3840x2160')) {
-                qualityBadge = '4K';
-                qualityColor = '#e74c3c';
-            } else if (resolution.includes('1920x1080')) {
-                qualityBadge = '1080p';
-                qualityColor = '#27ae60';
-            } else if (resolution.includes('1280x720')) {
-                qualityBadge = '720p';
-                qualityColor = '#f39c12';
-            } else if (resolution !== 'Unknown') {
-                qualityBadge = 'SD';
-                qualityColor = '#95a5a6';
-            } else {
-                qualityBadge = '?';
-            }
-            
+
+            const { label: qualityLabel, className: qualityClass } = getQualityBadge(width, height);
+
             const row = document.createElement('tr');
-            row.style.cssText = `
-                ${index === 0 ? 'background: #e8f5e8;' : ''}
-                ${index % 2 === 1 ? 'background: #f8f9fa;' : ''}
-            `;
-            
             row.innerHTML = `
-                <td style="padding: 12px; border-bottom: 1px solid #eee; font-weight: 500; color: #2c3e50;">${escapeHtml(movieTitle)}</td>
-                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; color: #2c3e50;">${displayYear}</td>
-                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; font-weight: 500; color: #2c3e50;">${formattedSize}</td>
-                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee; font-family: monospace; color: #2c3e50;">${resolution}</td>
-                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee;">
-                    <span style="background: ${qualityColor}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: bold;">${qualityBadge}</span>
-                </td>
-                <td style="padding: 12px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; color: #34495e; word-break: break-all;" title="${escapeHtml(path)}">${escapeHtml(path)}</td>
-                <td style="padding: 12px; text-align: center; border-bottom: 1px solid #eee;">
-                    <button style="
-                        background: #e74c3c;
-                        color: white;
-                        border: none;
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        font-size: 12px;
-                        cursor: pointer;
-                        font-weight: 500;
-                        transition: background 0.2s;
-                    " onmouseover="this.style.background='#c0392b'" onmouseout="this.style.background='#e74c3c'">
-                        🗑️ Delete
-                    </button>
+                <td class="cell-title">${escapeHtml(movieTitle)}</td>
+                <td>${displayYear}</td>
+                <td class="cell-size">${formattedSize}</td>
+                <td class="cell-resolution">${resolution}</td>
+                <td><span class="badge ${qualityClass}">${qualityLabel}</span></td>
+                <td class="cell-path" title="${escapeHtml(path)}">${escapeHtml(path)}</td>
+                <td>
+                    ${mergedVersions
+                        ? `<span class="badge badge-merged" title="Emby merged ${mergedVersions} versions into one item. Deleting the item would remove all of them, so delete this version from Emby or from disk directly.">Merged version</span>`
+                        : `<button class="btn-delete">${DELETE_LABEL}</button>`}
                 </td>
             `;
-            
+
             tableBody.appendChild(row);
 
-            const deleteBtn = row.querySelector('button');
+            const deleteBtn = row.querySelector('.btn-delete');
             if (deleteBtn) {
                 deleteBtn.onclick = (e) => {
                     e.stopPropagation();
@@ -615,18 +457,8 @@ function showDuplicatesHTML(libraryName, duplicates) {
     
     // Add download button
     const downloadButton = document.createElement('button');
+    downloadButton.className = 'btn-download';
     downloadButton.textContent = 'Download as Text File';
-    downloadButton.style.cssText = `
-        background: #2ecc71;
-        color: white;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 6px;
-        font-size: 14px;
-        cursor: pointer;
-        margin-top: 20px;
-        font-weight: 500;
-    `;
     downloadButton.onclick = () => downloadDuplicates(libraryName, duplicates);
     
     // Assemble modal
@@ -639,19 +471,17 @@ function showDuplicatesHTML(libraryName, duplicates) {
     // Add to page
     document.body.appendChild(modal);
     
-    // Close on background click
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            document.body.removeChild(modal);
-        }
+    // Close via button, background click or Escape key
+    const closeModal = () => {
+        modal.remove();
+        document.removeEventListener('keydown', handleEscape);
     };
-    
-    // Close on Escape key
     const handleEscape = (e) => {
-        if (e.key === 'Escape') {
-            document.body.removeChild(modal);
-            document.removeEventListener('keydown', handleEscape);
-        }
+        if (e.key === 'Escape') closeModal();
+    };
+    closeButton.onclick = closeModal;
+    modal.onclick = (e) => {
+        if (e.target === modal) closeModal();
     };
     document.addEventListener('keydown', handleEscape);
 }
@@ -732,7 +562,7 @@ function importSettings() {
 
 // Function to delete a movie from Emby library
 async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
-    const embyServerUrl = document.getElementById('embyServerUrl').value.trim();
+    const embyServerUrl = getServerUrl();
     const apiKey = document.getElementById('apiKey').value;
     
     if (!embyServerUrl || !apiKey) {
@@ -741,28 +571,17 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
     }
     
     // Confirm deletion
-    if (!confirm(`Are you sure you want to delete "${movieTitle}" from your Emby library?\n\nThis will remove the movie from Emby but may not delete the actual file from your NAS.`)) {
+    if (!confirm(`Are you sure you want to delete "${movieTitle}" from your Emby library?\n\nWARNING: Emby also deletes the media file(s) from disk. This cannot be undone.`)) {
         return;
     }
     
-    try {
-        // Disable the delete button to prevent multiple clicks
-        const deleteBtn = rowElement.querySelector('button');
-        if (deleteBtn) {
-            deleteBtn.disabled = true;
-            deleteBtn.textContent = 'Deleting...';
-            deleteBtn.style.background = '#95a5a6';
-        }
-        
-        let serverUrl = embyServerUrl;
-        if (!/^https?:\/\//i.test(serverUrl)) {
-            serverUrl = 'http://' + serverUrl;
-        }
-        
-        // Clean up the server URL - remove trailing slashes
-        serverUrl = serverUrl.replace(/\/+$/, '');
+    // Disable the delete button to prevent multiple clicks
+    const deleteBtn = rowElement.querySelector('.btn-delete');
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = 'Deleting...';
 
-        const response = await fetch(`${serverUrl}/emby/Items/${itemId}`, {
+    try {
+        const response = await fetch(`${embyServerUrl}/emby/Items/${itemId}`, {
             method: 'DELETE',
             headers: {
                 'X-Emby-Token': apiKey,
@@ -773,30 +592,30 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
         
         if (response.ok) {
             // Success - remove the row from the table
-            rowElement.style.transition = 'opacity 0.3s, transform 0.3s';
-            rowElement.style.opacity = '0.5';
-            rowElement.style.transform = 'scale(0.95)';
+            rowElement.classList.add('removing');
+
+            // Look up the containers before the row is detached from the DOM
+            const table = rowElement.closest('table');
+            const duplicateSet = rowElement.closest('.duplicate-set');
             
             setTimeout(() => {
                 rowElement.remove();
                 
                 // Check if this was the last row in the duplicate set
-                const table = rowElement.closest('table');
                 const remainingRows = table.querySelectorAll('tbody tr').length;
                 
                 if (remainingRows === 0) {
                     // Remove the entire duplicate set if no movies remain
-                    const duplicateSet = table.closest('div');
-                    duplicateSet.style.transition = 'opacity 0.3s, transform 0.3s';
-                    duplicateSet.style.opacity = '0';
-                    duplicateSet.style.transform = 'scale(0.95)';
-                    
+                    duplicateSet.classList.add('removing');
+
                     setTimeout(() => {
                         duplicateSet.remove();
                         
                         // Update the header count
                         updateDuplicateCount();
                     }, 300);
+                } else {
+                    updateDuplicateCount();
                 }
             }, 300);
             
@@ -806,6 +625,7 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
         } else if (response.status === 404) {
             showNotification(`Movie "${movieTitle}" was not found in Emby (may have already been deleted)`, 'warning');
             rowElement.remove();
+            updateDuplicateCount();
         } else {
             // Get more details about the error
             let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
@@ -825,84 +645,27 @@ async function deleteMovieFromEmby(itemId, movieTitle, rowElement) {
         showNotification(`Failed to delete "${movieTitle}": ${error.message}`, 'error');
         
         // Re-enable the button on error
-        const deleteBtn = rowElement.querySelector('button');
-        if (deleteBtn) {
-            deleteBtn.disabled = false;
-            deleteBtn.textContent = '🗑️ Delete';
-            deleteBtn.style.background = '#e74c3c';
-        }
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = DELETE_LABEL;
     }
 }
 
 // Function to show notifications
 function showNotification(message, type = 'info') {
+    // type is 'success', 'error', 'warning' or 'info' (default colour)
     const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 15px 20px;
-        border-radius: 8px;
-        color: white;
-        font-weight: 500;
-        z-index: 10000;
-        max-width: 400px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        animation: slideIn 0.3s ease-out;
-    `;
-    
-    // Set background color based on type
-    switch (type) {
-        case 'success':
-            notification.style.background = '#27ae60';
-            break;
-        case 'error':
-            notification.style.background = '#e74c3c';
-            break;
-        case 'warning':
-            notification.style.background = '#f39c12';
-            break;
-        default:
-            notification.style.background = '#3498db';
-    }
-    
+    notification.className = `notification ${type}`;
     notification.textContent = message;
-    
-    // Add slide-in animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes slideOut {
-            from { transform: translateX(0); opacity: 1; }
-            to { transform: translateX(100%); opacity: 0; }
-        }
-    `;
-    document.head.appendChild(style);
-    
     document.body.appendChild(notification);
-    
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease-in';
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 300);
-    }, 5000);
-    
-    // Allow manual dismissal by clicking
-    notification.onclick = () => {
-        notification.style.animation = 'slideOut 0.3s ease-in';
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 300);
+
+    const dismiss = () => {
+        notification.classList.add('closing');
+        setTimeout(() => notification.remove(), 300);
     };
+
+    // Auto-remove after 5 seconds, or earlier on click
+    setTimeout(dismiss, 5000);
+    notification.onclick = dismiss;
 }
 
 // Function to update duplicate count in the modal header
@@ -920,7 +683,7 @@ function updateDuplicateCount() {
 
     if (remainingSets === 0) {
         duplicatesContainer.innerHTML = `
-            <div style="text-align: center; padding: 40px; color: #27ae60;">
+            <div class="all-removed">
                 <h3>🎉 All duplicates have been removed!</h3>
                 <p>You can close this window now.</p>
             </div>
@@ -929,18 +692,13 @@ function updateDuplicateCount() {
 }
 
 function openEmby() {
-    let embyServerUrl = document.getElementById('embyServerUrl').value.trim();
-    
+    const embyServerUrl = getServerUrl();
+
     if (!embyServerUrl) {
         alert('Please enter an Emby Server URL first');
         return;
     }
-    
-    // Add http:// if no protocol specified
-    if (!/^https?:\/\//i.test(embyServerUrl)) {
-        embyServerUrl = 'http://' + embyServerUrl;
-    }
-    
+
     // Open Emby in a new tab
     window.open(embyServerUrl, '_blank');
 }
