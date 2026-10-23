@@ -1,3 +1,8 @@
+:root {
+    --emby-green: #52b54b;
+    --emby-green-dark: #46a040;
+}
+
 body {
     font-family: 'Roboto', sans-serif;
     background-color: #0f1219;
@@ -31,7 +36,7 @@ h1 {
     margin-bottom: 40px;
     font-weight: 300;
     font-size: 2.5em;
-    color: #4fc3f7;
+    color: var(--emby-green);
     text-transform: uppercase;
     letter-spacing: 2px;
 }
@@ -52,7 +57,7 @@ h1 {
 .input-field label {
     font-size: 14px;
     font-weight: 500;
-    color: #4fc3f7;
+    color: var(--emby-green);
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-left: 2px;
@@ -74,23 +79,23 @@ input {
 
 input:focus {
     outline: none;
-    box-shadow: 0 0 0 2px #4fc3f7;
+    box-shadow: 0 0 0 2px var(--emby-green);
 }
 
 button {
-    background-color: #4fc3f7;
+    background-color: var(--emby-green);
     color: #0f1219;
     cursor: pointer;
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;
-    box-shadow: 0 4px 6px rgba(79,195,247,0.1);
+    box-shadow: 0 4px 6px rgba(82,181,75,0.1);
 }
 
 button:hover {
-    background-color: #3db8eb;
+    background-color: var(--emby-green-dark);
     transform: translateY(-2px);
-    box-shadow: 0 6px 8px rgba(79,195,247,0.2);
+    box-shadow: 0 6px 8px rgba(82,181,75,0.2);
 }
 
 .button-group {
@@ -100,7 +105,7 @@ button:hover {
 }
 
 .button-group button {
-    background: #3498db;
+    background: var(--emby-green);
     color: white;
     border: none;
     padding: 12px 20px;
@@ -113,7 +118,7 @@ button:hover {
 }
 
 .button-group button:hover {
-    background: #2980b9;
+    background: var(--emby-green-dark);
 }
 
 #results {
@@ -141,7 +146,7 @@ button:hover {
 
 .library-box h3 {
     margin-top: 0;
-    color: #4fc3f7;
+    color: var(--emby-green);
     font-weight: 400;
 }
 
@@ -183,7 +188,7 @@ button:hover {
 .spinner {
     width: 50px;
     height: 50px;
-    border: 3px solid #4fc3f7;
+    border: 3px solid var(--emby-green);
     border-top: 3px solid transparent;
     border-radius: 50%;
     animation: spin 1s linear infinite;
@@ -192,7 +197,7 @@ button:hover {
 #loading-overlay p {
     margin-top: 20px;
     font-size: 18px;
-    color: #4fc3f7;
+    color: var(--emby-green);
 }
 
 @keyframes spin {
@@ -222,18 +227,18 @@ button:hover {
 }
 
 .copyright a:hover {
-    color: #4fc3f7;
+    color: var(--emby-green);
     text-decoration: underline;
 }
 
 /* "No duplicates" message */
 .no-duplicates {
-    background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+    background: linear-gradient(135deg, #6cc966 0%, #3e9a38 100%);
     color: white;
     padding: 40px 30px;
     border-radius: 12px;
     text-align: center;
-    box-shadow: 0 8px 25px rgba(116, 185, 255, 0.3);
+    box-shadow: 0 8px 25px rgba(82, 181, 75, 0.3);
     margin: 20px 0;
     animation: fadeInUp 0.6s ease-out;
 }
@@ -342,7 +347,7 @@ button:hover {
 }
 
 .duplicate-set-header {
-    background: #3498db;
+    background: var(--emby-green);
     color: white;
     padding: 15px 20px;
     font-weight: bold;
@@ -502,7 +507,7 @@ button:hover {
     z-index: 10000;
     max-width: 400px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    background: #3498db;
+    background: var(--emby-green);
     cursor: pointer;
     animation: slideIn 0.3s ease-out;
 }
