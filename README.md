@@ -10,12 +10,13 @@ This is an enhanced fork of a web-based tool designed to help Emby users identif
 
 - **Intelligent Algorithm**: Uses exact name and year matching to identify true duplicates while avoiding false positives with sequels and remakes
 - **Path-Based Year Detection**: Extracts year information from file paths for more accurate duplicate detection
-- **Quality Analysis**: Shows resolution, file size, and quality indicators (4K, 1080p, 720p, SD) for each duplicate
+- **Quality Analysis**: Shows resolution, file size, and quality indicators (4K, 1080p, 720p, SD) for each duplicate. The quality is based on the video width *or* height, so cropped widescreen (e.g. 3840x1600, 1920x800) and 4:3 (e.g. 1440x1080) encodes are labelled correctly
+- **Merged Versions**: Movies that Emby has merged into a single item with several versions are listed too, one row per version
 
 ### 📊 Rich Visual Interface
 
 - **Interactive Modal View**: View duplicates in a beautiful, detailed table format with quality badges
-- **Sortable Results**: Duplicates are automatically sorted by resolution and file size (best quality first)
+- **Sorted Results**: Duplicates are automatically sorted by resolution and file size (best quality first)
 - **Color-Coded Quality Badges**: Instantly identify 4K, 1080p, 720p, and SD content
 - **Responsive Design**: Modern UI with smooth animations and transitions
 
@@ -23,6 +24,7 @@ This is an enhanced fork of a web-based tool designed to help Emby users identif
 
 - **In-App Deletion**: Delete duplicate movies directly from the web interface
 - **Smart Confirmation**: Confirms deletion before removing items
+- **Merged Versions Protected**: Versions merged into a single Emby item have no Delete button, because deleting the item would remove all of its versions
 - **Real-Time Updates**: Interface updates immediately after deletion
 - **Success Notifications**: Toast notifications provide feedback on operations
 
@@ -61,7 +63,7 @@ This is an enhanced fork of a web-based tool designed to help Emby users identif
 
 The tool automatically:
 
-- Detects `http://` protocol if not specified
+- Adds `http://` if no protocol is specified and removes trailing slashes from the server URL
 - Saves your credentials for future use
 - Sorts duplicates by quality (highest resolution and largest file first)
 - Updates the interface in real-time as you delete items
@@ -70,11 +72,10 @@ The tool automatically:
 
 This fork features an enhanced detection algorithm that:
 
-- Uses exact name and year matching to prevent false positives
+- Uses exact name and year matching to prevent false positives (names are compared as Emby reports them, without normalization)
 - Extracts year information from file paths for better accuracy
 - Avoids grouping sequels or different movies together
-- Normalizes movie names while preserving important information
-- Filters quality indicators without losing movie identity
+- Lists each version of movies that Emby has merged into a single item
 
 ## Technical Improvements
 
@@ -82,7 +83,7 @@ This fork features an enhanced detection algorithm that:
 - **API Integration**: Full integration with Emby's REST API for deletion operations
 - **LocalStorage Persistence**: Automatic saving and loading of user preferences
 - **Modular Code**: Well-organized functions for easy maintenance and extension
-- **Console Utilities**: Additional functions for advanced users (export/import settings)
+- **Console Utilities**: Additional functions for advanced users, callable from the browser console: `exportSettings()`, `importSettings()` and `clearSavedData()`
 
 ## Browser Compatibility
 
@@ -98,7 +99,7 @@ Works in all modern browsers that support:
 - **Quality Comparison**: The interface automatically highlights the best quality copy (green background)
 - **Batch Operations**: Review all duplicates before deleting to make informed decisions
 - **Backup First**: Consider downloading the duplicate report before deleting files
-- **NAS Users**: Note that deletion removes items from Emby; actual file deletion depends on your NAS/server settings
+- **Deletion Is Permanent**: Deleting an item through Emby also deletes its media file(s) from disk, provided the Emby server has write access to the media folder. This cannot be undone
 
 ## Credits
 
